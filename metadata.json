@@ -1,0 +1,6 @@
+{
+  "name": "CampusFix AI",
+  "description": "AI-Powered University Maintenance Platform for reporting, AI triage, staff dispatch, real-time tracking, and executive facility analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
