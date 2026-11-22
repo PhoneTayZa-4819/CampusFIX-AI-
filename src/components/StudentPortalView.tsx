@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Megaphone,
   RefreshCw,
@@ -22,6 +22,7 @@ import {
   Wrench,
   Edit3,
   AlertCircle,
+  Copy,
 } from 'lucide-react';
 import {
   AiAnalysisResult,
@@ -35,9 +36,11 @@ import {
 } from '../data/seedData';
 import {
   classifyIssueInput,
+  findPossibleDuplicates,
   CreateTicketInput,
   validateNewReportInput,
 } from '../utils/campusFixStore';
+import { analyzeIssue } from '../utils/aiAnalysis';
 import { ReportTrackingPanel } from './ReportTrackingPanel';
 
 interface StudentPortalViewProps {
@@ -56,6 +59,14 @@ interface StudentPortalViewProps {
 }
 
 type MobileTab = 'home' | 'report' | 'reports' | 'alerts';
+
+const ANALYSIS_STAGES = [
+  'Reading the photo',
+  'Identifying the fault',
+  'Checking for safety risks',
+  'Setting the priority',
+  'Writing the technician brief',
+];
 
 export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   tickets,
@@ -84,6 +95,19 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   );
 
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [analyzeStage, setAnalyzeStage] = useState<number>(0);
+
+  // Walk through the analysis stages while Gemini works, holding on the last one.
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setAnalyzeStage(0);
+      return;
+    }
+    const id = window.setInterval(() => {
+      setAnalyzeStage((s) => Math.min(s + 1, ANALYSIS_STAGES.length - 1));
+    }, 2600);
+    return () => window.clearInterval(id);
+  }, [isAnalyzing]);
   const [aiResult, setAiResult] = useState<AiAnalysisResult | null>(null);
   const [editableAiDescription, setEditableAiDescription] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -98,6 +122,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
 
   const availableRooms = CAMPUS_BUILDINGS[building] || ['Room 101'];
   const currentStep = submittedTicket ? 3 : aiResult ? 2 : 1;
+  const duplicates = aiResult
+    ? findPossibleDuplicates(tickets, { building, room, category: aiResult.category })
+    : [];
 
   const handleBuildingChange = (nextBuilding: string) => {
     setBuilding(nextBuilding);
@@ -158,18 +185,18 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
     setSubmittedTicket(null);
     setIsAnalyzing(true);
 
-    window.setTimeout(() => {
-      const analysis = classifyIssueInput({
-        sampleId: selectedSampleId,
-        building,
-        room,
-        description,
-        fileName: photoName,
-      });
+    analyzeIssue({
+      sampleId: selectedSampleId,
+      building,
+      room,
+      description,
+      fileName: photoName,
+      photoUrl: hasPhoto ? photoPreview : null,
+    }).then((analysis) => {
       setAiResult(analysis);
       setEditableAiDescription(analysis.generatedDescription);
       setIsAnalyzing(false);
-    }, 950);
+    });
   };
 
   const handleSubmitReport = (e?: React.FormEvent) => {
@@ -613,11 +640,24 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                           />
                           <Sparkles className="w-6 h-6 text-[#F97316] mb-1.5" />
                           <p className="text-xs font-bold tracking-wide">
-                            AI Analyzing Image...
+                            Gemini is analyzing...
                           </p>
-                          <p className="text-[11px] text-slate-300 mt-0.5">
-                            Detecting fault &amp; severity
+                          <p
+                            key={analyzeStage}
+                            className="text-[11px] text-slate-200 mt-0.5 animate-fade-in"
+                          >
+                            {ANALYSIS_STAGES[analyzeStage]}
                           </p>
+                          <div className="mt-2 flex gap-1" aria-hidden="true">
+                            {ANALYSIS_STAGES.map((_, i) => (
+                              <span
+                                key={i}
+                                className={`h-1 w-5 rounded-full transition-colors duration-300 ${
+                                  i <= analyzeStage ? 'bg-[#F97316]' : 'bg-white/25'
+                                }`}
+                              />
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -754,9 +794,16 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                           AI Analysis Result
                         </h3>
                       </div>
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                      <span
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700"
+                        title={
+                          aiResult.source === 'gemini'
+                            ? 'Analyzed by Google Gemini from your photo and description'
+                            : 'AI service unavailable — analyzed offline from your description'
+                        }
+                      >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        Analyzed
+                        {aiResult.source === 'gemini' ? 'Analyzed by Gemini' : 'Analyzed (offline)'}
                       </span>
                     </div>
 
@@ -841,6 +888,59 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                         className="w-full rounded-xl border border-orange-200 bg-white px-3.5 py-2.5 text-sm text-[#0F172A] focus:border-[#EA580C] focus:outline-none focus:ring-2 focus:ring-[#EA580C]/20 resize-none"
                       />
                     </div>
+
+                    {/* Possible duplicate reports */}
+                    {duplicates.length > 0 && (
+                      <div
+                        role="note"
+                        className="rounded-xl border border-sky-200 bg-sky-50 p-3 space-y-2.5"
+                      >
+                        <div className="flex items-start gap-2">
+                          <Copy className="w-4 h-4 text-sky-700 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-xs font-bold text-sky-900">
+                              {duplicates[0].sameRoom
+                                ? 'This looks already reported'
+                                : `Similar open ${aiResult.category} report in ${building}`}
+                            </p>
+                            <p className="text-[11px] text-sky-800 mt-0.5">
+                              Follow the existing report instead of filing a new one, so
+                              technicians aren&apos;t sent twice.
+                            </p>
+                          </div>
+                        </div>
+                        <ul className="space-y-1.5">
+                          {duplicates.map(({ ticket, sameRoom }) => (
+                            <li key={ticket.id}>
+                              <button
+                                type="button"
+                                onClick={() => onSelectTicket(ticket.id)}
+                                className="w-full flex items-center gap-2.5 rounded-lg bg-white border border-sky-100 hover:border-sky-300 px-2.5 py-2 text-left cursor-pointer transition-colors"
+                              >
+                                <img
+                                  src={ticket.beforePhoto}
+                                  alt=""
+                                  className="w-9 h-9 rounded-md object-cover shrink-0"
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block text-xs font-semibold text-[#0F172A] truncate">
+                                    {ticket.code} · {ticket.title}
+                                  </span>
+                                  <span className="block text-[11px] text-slate-500 truncate">
+                                    {ticket.room}
+                                    {sameRoom ? ' (same room)' : ''} · {ticket.status} ·{' '}
+                                    {ticket.relativeTime}
+                                  </span>
+                                </span>
+                                <span className="text-[11px] font-bold text-sky-700 shrink-0">
+                                  Track it
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 )}
 

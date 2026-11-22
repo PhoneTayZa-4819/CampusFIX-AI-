@@ -10,6 +10,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react';
+import { VerificationResult } from './OperationsView';
 import { MaintenanceTicket } from '../types/campusFix';
 import { getTrackingSteps } from '../utils/campusFixStore';
 
@@ -284,6 +285,9 @@ export const ReportTrackingPanel: React.FC<ReportTrackingPanelProps> = ({
                   ? `Verified by ${ticket.assignedTo || 'Facilities Team'}`
                   : 'Awaiting repair completion'}
               </p>
+              {ticket.aiVerification && (
+                <VerificationResult verification={ticket.aiVerification} />
+              )}
             </div>
 
             {/* Issue Description Summary */}

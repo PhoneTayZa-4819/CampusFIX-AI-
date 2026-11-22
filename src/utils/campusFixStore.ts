@@ -4,6 +4,7 @@ import {
   IssueCategory,
   IssuePriority,
   MaintenanceTicket,
+  RepairVerification,
   StudentNotification,
   TicketStatus,
   TrackingStep,
@@ -296,13 +297,18 @@ export function assignTechnicianInState(
   };
 }
 
+export interface StatusUpdateParams {
+  ticketId: string;
+  status: TicketStatus;
+  note?: string;
+  /** After-repair photo taken by the technician (used when resolving). */
+  afterPhoto?: string | null;
+  verification?: RepairVerification | null;
+}
+
 export function updateTicketStatusInState(
   state: CampusFixState,
-  params: {
-    ticketId: string;
-    status: TicketStatus;
-    note?: string;
-  },
+  params: StatusUpdateParams,
   now: Date = new Date(),
 ): CampusFixState {
   const stamp = formatNowStamp(now);
@@ -357,8 +363,12 @@ export function updateTicketStatusInState(
       relativeTime: 'Just now',
       afterPhoto:
         params.status === 'Resolved'
-          ? ticket.afterPhoto || defaultAfterPhoto
+          ? params.afterPhoto || ticket.afterPhoto || defaultAfterPhoto
           : ticket.afterPhoto,
+      aiVerification:
+        params.status === 'Resolved'
+          ? (params.verification ?? ticket.aiVerification ?? null)
+          : ticket.aiVerification,
       trackingTimestamps: nextTimestamps,
       technicianUpdates: [
         ...ticket.technicianUpdates,
@@ -611,4 +621,64 @@ export function savePersistedState(state: CampusFixState): void {
   } catch {
     // Ignore quota or storage restriction errors cleanly
   }
+}
+
+export interface DuplicateMatch {
+  ticket: MaintenanceTicket;
+  sameRoom: boolean;
+}
+
+/**
+ * Open reports that look like the same problem: same building and the
+ * category the AI assigned. Same-room matches rank first.
+ */
+export function findPossibleDuplicates(
+  tickets: MaintenanceTicket[],
+  params: { building: string; room: string; category: IssueCategory },
+): DuplicateMatch[] {
+  return tickets
+    .filter(
+      (t) =>
+        t.status !== 'Resolved' &&
+        t.building === params.building &&
+        t.category === params.category,
+    )
+    .map((ticket) => ({ ticket, sameRoom: ticket.room === params.room }))
+    .sort((a, b) => Number(b.sameRoom) - Number(a.sameRoom))
+    .slice(0, 2);
+}
+
+export interface TechnicianSuggestion {
+  name: string;
+  specialty: IssueCategory;
+  activeTickets: number;
+  reason: string;
+}
+
+/**
+ * Picks the technician for a ticket: a specialist in the ticket's category
+ * if there is one, otherwise the least-loaded general repair tech.
+ */
+export function suggestTechnician(
+  tickets: MaintenanceTicket[],
+  ticket: MaintenanceTicket,
+): TechnicianSuggestion {
+  const workload = computeTeamWorkload(tickets);
+  const specialists = workload.filter((w) => w.specialty === ticket.category);
+  const pool = specialists.length
+    ? specialists
+    : workload.filter((w) => w.specialty === 'General Repair');
+  const pick = [...(pool.length ? pool : workload)].sort(
+    (a, b) => a.activeTickets - b.activeTickets,
+  )[0];
+  const lightest = Math.min(...workload.map((w) => w.activeTickets));
+  const reason = specialists.length
+    ? `${ticket.categoryDisplay} specialist · ${pick.activeTickets} active jobs`
+    : `No ${ticket.category} specialist — general repair, ${pick.activeTickets} active jobs`;
+  return {
+    name: pick.name,
+    specialty: pick.specialty,
+    activeTickets: pick.activeTickets,
+    reason: pick.activeTickets === lightest ? `${reason} (lightest load)` : reason,
+  };
 }

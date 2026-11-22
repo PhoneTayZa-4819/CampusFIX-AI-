@@ -48,6 +48,14 @@ export interface AiAnalysisResult {
   confidence: number;
   suggestedPriority: IssuePriority;
   generatedDescription: string;
+  /** 'gemini' when the real model answered, 'fallback' for the local keyword classifier. */
+  source?: 'gemini' | 'fallback';
+}
+
+export interface RepairVerification {
+  verdict: 'resolved' | 'not_resolved' | 'unclear';
+  confidence: number;
+  summary: string;
 }
 
 export interface MaintenanceTicket {
@@ -69,6 +77,8 @@ export interface MaintenanceTicket {
   confidenceScore: number;
   beforePhoto: string;
   afterPhoto: string | null;
+  /** Gemini's before/after comparison, set when the ticket is resolved with a check. */
+  aiVerification?: RepairVerification | null;
   trackingTimestamps: Partial<Record<TrackingStepKey, string>>;
   technicianUpdates: TechnicianUpdate[];
 }
