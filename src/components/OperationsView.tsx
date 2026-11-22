@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Wrench,
   AlertCircle,
@@ -12,13 +12,22 @@ import {
   BarChart2,
   ExternalLink,
   Building2,
+  Sparkles,
+  Camera,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldQuestion,
+  Loader2,
 } from 'lucide-react';
 import {
   IssuePriority,
   MaintenanceTicket,
+  RepairVerification,
   TicketStatus,
 } from '../types/campusFix';
+import { verifyRepairPhotos } from '../utils/aiAnalysis';
 import {
+  ASSETS,
   CAMPUS_BUILDINGS,
   DUE_BY_OPTIONS,
   TECHNICIANS,
@@ -26,6 +35,8 @@ import {
 import {
   computeTeamWorkload,
   filterTickets,
+  StatusUpdateParams,
+  suggestTechnician,
 } from '../utils/campusFixStore';
 import { OpsSection } from './OperationsShell';
 
@@ -50,13 +61,50 @@ interface OperationsViewProps {
     priority: IssuePriority;
     dueBy: string;
   }) => void;
-  onUpdateTicketStatus: (params: {
-    ticketId: string;
-    status: TicketStatus;
-    note?: string;
-  }) => void;
+  onUpdateTicketStatus: (params: StatusUpdateParams) => void;
   onViewInStudentTracker: (ticketId: string) => void;
 }
+
+const VERDICT_STYLES = {
+  resolved: {
+    Icon: ShieldCheck,
+    label: 'AI verified: repair looks complete',
+    box: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+    icon: 'text-emerald-600',
+  },
+  not_resolved: {
+    Icon: ShieldAlert,
+    label: 'AI check: fault still visible',
+    box: 'border-red-200 bg-red-50 text-red-900',
+    icon: 'text-red-600',
+  },
+  unclear: {
+    Icon: ShieldQuestion,
+    label: 'AI check: cannot confirm from this photo',
+    box: 'border-amber-200 bg-amber-50 text-amber-900',
+    icon: 'text-amber-600',
+  },
+} as const;
+
+export const VerificationResult: React.FC<{ verification: RepairVerification }> = ({
+  verification,
+}) => {
+  const style = VERDICT_STYLES[verification.verdict];
+  return (
+    <div role="status" className={`rounded-lg border p-2.5 flex items-start gap-2 ${style.box}`}>
+      <style.Icon className={`w-4 h-4 mt-0.5 shrink-0 ${style.icon}`} />
+      <div className="min-w-0">
+        <p className="text-xs font-bold">
+          {style.label}{' '}
+          <span className="font-semibold opacity-70 tabular-nums">
+            ({verification.confidence}%)
+          </span>
+        </p>
+        <p className="text-[11px] mt-0.5 leading-snug">{verification.summary}</p>
+      </div>
+    </div>
+  );
+};
 
 const ALL_STATUSES: TicketStatus[] = [
   'Submitted',
@@ -83,6 +131,8 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
 
   const selectedTicket =
     tickets.find((t) => t.id === selectedTicketId) || tickets[0] || null;
+  const selectedTicketRef = useRef<string | null>(null);
+  selectedTicketRef.current = selectedTicket?.id ?? null;
 
   const [assignTech, setAssignTech] = useState<string>(
     selectedTicket?.assignedTo || TECHNICIANS[0].name,
@@ -101,10 +151,54 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
   );
   const [statusNote, setStatusNote] = useState<string>('');
   const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
+  const [afterPhoto, setAfterPhoto] = useState<string | null>(null);
+  const [verification, setVerification] = useState<RepairVerification | null>(null);
+  const [verifyState, setVerifyState] = useState<'idle' | 'checking' | 'failed'>('idle');
+
+  // A new ticket starts a fresh repair check.
+  useEffect(() => {
+    setAfterPhoto(null);
+    setVerification(null);
+    setVerifyState('idle');
+  }, [selectedTicket?.id]);
+
+  const chooseAfterPhoto = (url: string | null) => {
+    setAfterPhoto(url);
+    setVerification(null);
+    setVerifyState('idle');
+  };
+
+  const handleAfterPhotoFile = (file: File | undefined) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') chooseAfterPhoto(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleVerifyRepair = async () => {
+    if (!selectedTicket || !afterPhoto) return;
+    const ticketId = selectedTicket.id;
+    setVerifyState('checking');
+    setVerification(null);
+    const result = await verifyRepairPhotos({
+      beforeUrl: selectedTicket.beforePhoto,
+      afterUrl: afterPhoto,
+      issue: `${selectedTicket.title} - ${selectedTicket.description}`,
+      location: `${selectedTicket.building}, ${selectedTicket.room}`,
+    });
+    // Ignore a late answer for a ticket that is no longer selected.
+    if (ticketId !== selectedTicketRef.current) return;
+    setVerification(result);
+    setVerifyState(result ? 'idle' : 'failed');
+  };
 
   useEffect(() => {
     if (!selectedTicket) return;
-    setAssignTech(selectedTicket.assignedTo || TECHNICIANS[0].name);
+    setAssignTech(
+      selectedTicket.assignedTo || suggestTechnician(tickets, selectedTicket).name,
+    );
     setAssignPriority(selectedTicket.priority);
     setAssignDueBy(
       DUE_BY_OPTIONS.includes(selectedTicket.dueBy)
@@ -113,6 +207,14 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
     );
     setStatusChoice(selectedTicket.status);
   }, [selectedTicket?.id, selectedTicket?.assignedTo, selectedTicket?.status, selectedTicket?.priority]);
+
+  const techSuggestion =
+    selectedTicket && selectedTicket.status !== 'Resolved'
+      ? suggestTechnician(tickets, selectedTicket)
+      : null;
+
+  const showRepairCheck =
+    !!selectedTicket && statusChoice === 'Resolved' && selectedTicket.status !== 'Resolved';
 
   const filteredTickets = filterTickets(tickets, priorityFilter, searchQuery);
   const workload = computeTeamWorkload(tickets);
@@ -159,10 +261,13 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
   const handleStatusSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTicket) return;
+    const resolving = statusChoice === 'Resolved';
     onUpdateTicketStatus({
       ticketId: selectedTicket.id,
       status: statusChoice,
       note: statusNote,
+      afterPhoto: resolving ? afterPhoto : undefined,
+      verification: resolving ? verification : undefined,
     });
     setStatusNote('');
     showFeedback(
@@ -368,6 +473,37 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                   {selectedTicket.code}
                 </span>
               </p>
+            )}
+
+            {techSuggestion && (
+              <div className="rounded-xl border border-orange-200 bg-[#FFFBF7] p-3 flex items-start gap-2.5">
+                <Sparkles className="w-4 h-4 text-[#EA580C] mt-0.5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[#EA580C]">
+                    AI Suggested
+                  </p>
+                  <p className="text-sm font-bold text-[#0F172A]">{techSuggestion.name}</p>
+                  <p className="text-[11px] text-slate-600">{techSuggestion.reason}</p>
+                </div>
+                {assignTech === techSuggestion.name &&
+                assignPriority === selectedTicket?.priority ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 shrink-0 self-center">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Applied
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignTech(techSuggestion.name);
+                      if (selectedTicket) setAssignPriority(selectedTicket.priority);
+                    }}
+                    className="shrink-0 self-center text-xs font-bold text-[#EA580C] hover:text-[#C2410C] border border-orange-200 hover:border-orange-300 bg-white rounded-lg px-2.5 py-1 cursor-pointer"
+                  >
+                    Apply
+                  </button>
+                )}
+              </div>
             )}
 
             <form onSubmit={handleAssignSubmit} className="space-y-3.5">
@@ -769,11 +905,117 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                   />
                 </div>
 
+                {showRepairCheck && (
+                  <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Camera className="w-4 h-4 text-[#EA580C]" />
+                      <p className="text-xs font-bold text-[#0F172A]">
+                        After-Repair Photo &amp; AI Check
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <figure className="space-y-1">
+                        <img
+                          src={selectedTicket.beforePhoto}
+                          alt="Before repair"
+                          className="w-full aspect-[4/3] object-cover rounded-lg border border-slate-200"
+                        />
+                        <figcaption className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                          Before
+                        </figcaption>
+                      </figure>
+                      <figure className="space-y-1">
+                        {afterPhoto ? (
+                          <img
+                            src={afterPhoto}
+                            alt="After repair"
+                            className="w-full aspect-[4/3] object-cover rounded-lg border border-slate-200"
+                          />
+                        ) : (
+                          <label className="w-full aspect-[4/3] rounded-lg border-2 border-dashed border-slate-300 hover:border-[#EA580C] flex flex-col items-center justify-center text-center text-[11px] text-slate-500 cursor-pointer">
+                            <Camera className="w-4 h-4 mb-1" />
+                            Upload photo
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="sr-only"
+                              onChange={(e) => handleAfterPhotoFile(e.target.files?.[0])}
+                            />
+                          </label>
+                        )}
+                        <figcaption className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                          After
+                        </figcaption>
+                      </figure>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="text-slate-500">Demo:</span>
+                      <button
+                        type="button"
+                        onClick={() => chooseAfterPhoto(ASSETS.acLeakAfter)}
+                        className="px-2 py-0.5 rounded-md border border-slate-200 bg-white hover:border-[#EA580C] font-semibold text-slate-700 cursor-pointer"
+                      >
+                        Repaired AC photo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => chooseAfterPhoto(selectedTicket.beforePhoto)}
+                        className="px-2 py-0.5 rounded-md border border-slate-200 bg-white hover:border-[#EA580C] font-semibold text-slate-700 cursor-pointer"
+                      >
+                        Unchanged photo
+                      </button>
+                      {afterPhoto && (
+                        <button
+                          type="button"
+                          onClick={() => chooseAfterPhoto(null)}
+                          className="px-2 py-0.5 rounded-md font-semibold text-slate-500 hover:text-red-600 cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleVerifyRepair}
+                      disabled={!afterPhoto || verifyState === 'checking'}
+                      className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl border border-orange-200 bg-white text-xs font-bold text-[#EA580C] hover:border-[#EA580C] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      {verifyState === 'checking' ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Gemini is comparing the photos...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5" />
+                          Verify Repair with AI
+                        </>
+                      )}
+                    </button>
+
+                    {verification && <VerificationResult verification={verification} />}
+                    {verifyState === 'failed' && (
+                      <p className="text-[11px] text-slate-500">
+                        AI check unavailable right now. You can still resolve the ticket.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  className="w-full py-2.5 px-4 rounded-xl bg-[#EA580C] hover:bg-[#F97316] text-white text-sm font-semibold shadow-xs transition-colors cursor-pointer"
+                  className={`w-full py-2.5 px-4 rounded-xl text-white text-sm font-semibold shadow-xs transition-colors cursor-pointer ${
+                    showRepairCheck && verification?.verdict === 'not_resolved'
+                      ? 'bg-slate-700 hover:bg-slate-800'
+                      : 'bg-[#EA580C] hover:bg-[#F97316]'
+                  }`}
                 >
-                  Update Status
+                  {showRepairCheck && verification?.verdict === 'not_resolved'
+                    ? 'Resolve Anyway'
+                    : 'Update Status'}
                 </button>
               </form>
 

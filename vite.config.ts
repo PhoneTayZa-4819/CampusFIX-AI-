@@ -2,14 +2,22 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
-import {defineConfig} from 'vite';
+import {defineConfig, loadEnv} from 'vite';
+import {analyzeApiPlugin} from './server/analyze';
 
-export default defineConfig(() => {
+export default defineConfig(({mode}) => {
+  // Server-only secrets: expose to the /api middleware via process.env,
+  // never via import.meta.env (no VITE_ prefix), so they stay out of the bundle.
+  const env = loadEnv(mode, __dirname, '');
+  for (const key of ['GEMINI_API_KEY', 'GEMINI_MODEL']) {
+    if (env[key] && !process.env[key]) process.env[key] = env[key];
+  }
   return {
     base: '/',
     plugins: [
       react(),
       tailwindcss(),
+      analyzeApiPlugin(),
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.

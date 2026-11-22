@@ -14,6 +14,7 @@ import {
   CreateTicketInput,
   loadPersistedState,
   savePersistedState,
+  StatusUpdateParams,
   updateTicketStatusInState,
 } from './utils/campusFixStore';
 import { BrandHeader } from './components/BrandHeader';
@@ -83,11 +84,7 @@ export default function App() {
     setState((prev) => assignTechnicianInState(prev, params));
   };
 
-  const handleUpdateTicketStatus = (params: {
-    ticketId: string;
-    status: TicketStatus;
-    note?: string;
-  }) => {
+  const handleUpdateTicketStatus = (params: StatusUpdateParams) => {
     setState((prev) => updateTicketStatusInState(prev, params));
   };
 
