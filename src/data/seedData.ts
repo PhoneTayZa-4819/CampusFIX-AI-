@@ -5,12 +5,12 @@ import {
 } from '../types/campusFix';
 
 export const ASSETS = {
-  campusHero: '/src/assets/images/campus_hero_building_1795350817041.jpg',
-  acLeakBefore: '/src/assets/images/ac_leak_before_1795350816571.jpg',
-  acLeakAfter: '/src/assets/images/ac_leak_after_1795350817384.jpg',
-  ceilingLight: '/src/assets/images/ceiling_light_flicker_1795350864259.jpg',
-  faucetLeak: '/src/assets/images/restroom_faucet_leak_1795350822963.jpg',
-  elevatorIssue: '/src/assets/images/elevator_out_of_service_1795350817839.jpg',
+  campusHero: './src/assets/images/campus_hero_building_1795350817041.jpg',
+  acLeakBefore: './src/assets/images/ac_leak_before_1795350816571.jpg',
+  acLeakAfter: './src/assets/images/ac_leak_after_1795350817384.jpg',
+  ceilingLight: './src/assets/images/ceiling_light_flicker_1795350864259.jpg',
+  faucetLeak: './src/assets/images/restroom_faucet_leak_1795350822963.jpg',
+  elevatorIssue: './src/assets/images/elevator_out_of_service_1795350817839.jpg',
 } as const;
 
 export const CAMPUS_BUILDINGS: Record<string, string[]> = {
